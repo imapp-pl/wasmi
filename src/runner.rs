@@ -153,9 +153,15 @@ impl<'a, E: Externals> Interpreter<'a, E> {
 
 	fn do_run_function(&mut self, function_context: &mut FunctionContext, instructions: &[isa::Instruction]) -> Result<RunResult, TrapKind> {
 		loop {
+			let timer: howlong::timer::SteadyTimer;
+			let time;
+			let result;
+			timer = howlong::timer::SteadyTimer::new();
 			let instruction = &instructions[function_context.position];
-
-			match self.run_instruction(function_context, instruction)? {
+			result = self.run_instruction(function_context, instruction);
+			time = timer.elapsed().as_nanos();
+			println!("{:?}, {:?}", time, instruction);
+			match result? {
 				InstructionOutcome::RunNextInstruction => function_context.position += 1,
 				InstructionOutcome::Branch(target) => {
 					function_context.position = target.dst_pc as usize;
