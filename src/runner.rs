@@ -17,6 +17,17 @@ use common::{DEFAULT_MEMORY_INDEX, DEFAULT_TABLE_INDEX};
 use memory_units::Pages;
 use nan_preserving_float::{F32, F64};
 use isa;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static INSTRUCTION_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+fn increment_instruction_counter() {
+	INSTRUCTION_COUNT.fetch_add(1, Ordering::SeqCst);
+}
+
+fn reset_instruction_counter() {
+	INSTRUCTION_COUNT.store(0, Ordering::SeqCst);
+}
 
 /// Maximum number of entries in value stack.
 pub const DEFAULT_VALUE_STACK_LIMIT: usize = (1024 * 1024) / ::std::mem::size_of::<RuntimeValue>();
@@ -59,7 +70,7 @@ impl<'a, E: Externals> Interpreter<'a, E> {
 		}
 	}
 
-	pub fn start_execution(&mut self, func: &FuncRef, args: &[RuntimeValue]) -> Result<Option<RuntimeValue>, Trap> {
+	pub fn start_execution(&mut self, func: &FuncRef, args: &[RuntimeValue], sample: u32) -> Result<Option<RuntimeValue>, Trap> {
 		for arg in args {
 			self.value_stack
 				.push(*arg)
@@ -75,7 +86,7 @@ impl<'a, E: Externals> Interpreter<'a, E> {
 		let mut call_stack = Vec::new();
 		call_stack.push(initial_frame);
 
-		self.run_interpreter_loop(&mut call_stack)?;
+		self.run_interpreter_loop(&mut call_stack, sample)?;
 
 		let opt_return_value = func.signature().return_type().map(|_vt| {
 			self.value_stack.pop()
@@ -87,7 +98,8 @@ impl<'a, E: Externals> Interpreter<'a, E> {
 		Ok(opt_return_value)
 	}
 
-	fn run_interpreter_loop(&mut self, call_stack: &mut Vec<FunctionContext>) -> Result<(), Trap> {
+	fn run_interpreter_loop(&mut self, call_stack: &mut Vec<FunctionContext>, sample: u32) -> Result<(), Trap> {
+		reset_instruction_counter();
 		loop {
 			let mut function_context = call_stack
 				.pop()
@@ -108,6 +120,7 @@ impl<'a, E: Externals> Interpreter<'a, E> {
 				self.do_run_function(
 					&mut function_context,
 					&function_body.code.code,
+					sample,
 				).map_err(Trap::new)?;
 
 			match function_return {
@@ -131,7 +144,7 @@ impl<'a, E: Externals> Interpreter<'a, E> {
 						},
 						FuncInstanceInternal::Host { ref signature, .. } => {
 							let args = prepare_function_args(signature, &mut self.value_stack);
-							let return_val = FuncInstance::invoke(&nested_func, &args, self.externals)?;
+							let return_val = FuncInstance::invoke(&nested_func, &args, self.externals, sample)?;
 
 							// Check if `return_val` matches the signature.
 							let value_ty = return_val.as_ref().map(|val| val.value_type());
@@ -151,7 +164,7 @@ impl<'a, E: Externals> Interpreter<'a, E> {
 		}
 	}
 
-	fn do_run_function(&mut self, function_context: &mut FunctionContext, instructions: &[isa::Instruction]) -> Result<RunResult, TrapKind> {
+	fn do_run_function(&mut self, function_context: &mut FunctionContext, instructions: &[isa::Instruction], sample: u32) -> Result<RunResult, TrapKind> {
 		loop {
 			let timer: howlong::timer::SteadyTimer;
 			let time;
@@ -160,7 +173,8 @@ impl<'a, E: Externals> Interpreter<'a, E> {
 			let instruction = &instructions[function_context.position];
 			result = self.run_instruction(function_context, instruction);
 			time = timer.elapsed().as_nanos();
-			println!("{:?}, {:?}", time, instruction);
+			println!("{:?},{:?},{:?}", sample, INSTRUCTION_COUNT.load(Ordering::SeqCst), time);
+			increment_instruction_counter();
 			match result? {
 				InstructionOutcome::RunNextInstruction => function_context.position += 1,
 				InstructionOutcome::Branch(target) => {

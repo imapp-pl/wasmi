@@ -140,12 +140,13 @@ impl FuncInstance {
 		func: &FuncRef,
 		args: &[RuntimeValue],
 		externals: &mut E,
+		sample: u32,
 	) -> Result<Option<RuntimeValue>, Trap> {
 		check_function_args(func.signature(), &args).map_err(|_| TrapKind::UnexpectedSignature)?;
 		match *func.as_internal() {
 			FuncInstanceInternal::Internal { .. } => {
 				let mut interpreter = Interpreter::new(externals);
-				interpreter.start_execution(func, args)
+				interpreter.start_execution(func, args, sample)
 			}
 			FuncInstanceInternal::Host {
 				ref host_func_index,
