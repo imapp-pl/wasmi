@@ -70,7 +70,7 @@ impl<'a, E: Externals> Interpreter<'a, E> {
 		}
 	}
 
-	pub fn start_execution(&mut self, func: &FuncRef, args: &[RuntimeValue], sample: u32) -> Result<Option<RuntimeValue>, Trap> {
+	pub fn start_execution(&mut self, func: &FuncRef, args: &[RuntimeValue], sample: u32, print_wasm_opcodes: bool) -> Result<Option<RuntimeValue>, Trap> {
 		for arg in args {
 			self.value_stack
 				.push(*arg)
@@ -86,7 +86,7 @@ impl<'a, E: Externals> Interpreter<'a, E> {
 		let mut call_stack = Vec::new();
 		call_stack.push(initial_frame);
 
-		self.run_interpreter_loop(&mut call_stack, sample)?;
+		self.run_interpreter_loop(&mut call_stack, sample, print_wasm_opcodes)?;
 
 		let opt_return_value = func.signature().return_type().map(|_vt| {
 			self.value_stack.pop()
@@ -98,7 +98,7 @@ impl<'a, E: Externals> Interpreter<'a, E> {
 		Ok(opt_return_value)
 	}
 
-	fn run_interpreter_loop(&mut self, call_stack: &mut Vec<FunctionContext>, sample: u32) -> Result<(), Trap> {
+	fn run_interpreter_loop(&mut self, call_stack: &mut Vec<FunctionContext>, sample: u32, print_wasm_opcodes: bool) -> Result<(), Trap> {
 		reset_instruction_counter();
 		loop {
 			let mut function_context = call_stack
@@ -121,6 +121,7 @@ impl<'a, E: Externals> Interpreter<'a, E> {
 					&mut function_context,
 					&function_body.code.code,
 					sample,
+					print_wasm_opcodes,
 				).map_err(Trap::new)?;
 
 			match function_return {
@@ -144,7 +145,7 @@ impl<'a, E: Externals> Interpreter<'a, E> {
 						},
 						FuncInstanceInternal::Host { ref signature, .. } => {
 							let args = prepare_function_args(signature, &mut self.value_stack);
-							let return_val = FuncInstance::invoke(&nested_func, &args, self.externals, sample)?;
+							let return_val = FuncInstance::invoke(&nested_func, &args, self.externals, sample, print_wasm_opcodes)?;
 
 							// Check if `return_val` matches the signature.
 							let value_ty = return_val.as_ref().map(|val| val.value_type());
@@ -164,31 +165,55 @@ impl<'a, E: Externals> Interpreter<'a, E> {
 		}
 	}
 
-	fn do_run_function(&mut self, function_context: &mut FunctionContext, instructions: &[isa::Instruction], sample: u32) -> Result<RunResult, TrapKind> {
-		loop {
-			let timer: howlong::timer::SteadyTimer;
-			let time;
-			let result;
-			timer = howlong::timer::SteadyTimer::new();
-			let instruction = &instructions[function_context.position];
-			result = self.run_instruction(function_context, instruction);
-			time = timer.elapsed().as_nanos();
-			println!("{:?},{:?},{:?}", sample, INSTRUCTION_COUNT.load(Ordering::SeqCst), time);
-			increment_instruction_counter();
-			match result? {
-				InstructionOutcome::RunNextInstruction => function_context.position += 1,
-				InstructionOutcome::Branch(target) => {
-					function_context.position = target.dst_pc as usize;
-					self.value_stack.drop_keep(target.drop_keep);
-				},
-				InstructionOutcome::ExecuteCall(func_ref) => {
-					function_context.position += 1;
-					return Ok(RunResult::NestedCall(func_ref));
-				},
-				InstructionOutcome::Return(drop_keep) => {
-					self.value_stack.drop_keep(drop_keep);
-					break;
-				},
+	fn do_run_function(&mut self, function_context: &mut FunctionContext, instructions: &[isa::Instruction], sample: u32, print_wasm_opcodes: bool) -> Result<RunResult, TrapKind> {
+		if print_wasm_opcodes {
+			loop {
+				let instruction = &instructions[function_context.position];
+				println!("{:?},{:?}", INSTRUCTION_COUNT.load(Ordering::SeqCst), instruction);
+				increment_instruction_counter();
+				match self.run_instruction(function_context, instruction)? {
+					InstructionOutcome::RunNextInstruction => function_context.position += 1,
+					InstructionOutcome::Branch(target) => {
+						function_context.position = target.dst_pc as usize;
+						self.value_stack.drop_keep(target.drop_keep);
+					},
+					InstructionOutcome::ExecuteCall(func_ref) => {
+						function_context.position += 1;
+						return Ok(RunResult::NestedCall(func_ref));
+					},
+					InstructionOutcome::Return(drop_keep) => {
+						self.value_stack.drop_keep(drop_keep);
+						break;
+					},
+				}
+			}
+		}
+		else {
+			loop {
+				let timer: howlong::timer::SteadyTimer;
+				let time;
+				let result;
+				timer = howlong::timer::SteadyTimer::new();
+				let instruction = &instructions[function_context.position];
+				result = self.run_instruction(function_context, instruction);
+				time = timer.elapsed().as_nanos();
+				println!("{:?},{:?},{:?}", sample, INSTRUCTION_COUNT.load(Ordering::SeqCst), time);
+				increment_instruction_counter();
+				match result? {
+					InstructionOutcome::RunNextInstruction => function_context.position += 1,
+					InstructionOutcome::Branch(target) => {
+						function_context.position = target.dst_pc as usize;
+						self.value_stack.drop_keep(target.drop_keep);
+					},
+					InstructionOutcome::ExecuteCall(func_ref) => {
+						function_context.position += 1;
+						return Ok(RunResult::NestedCall(func_ref));
+					},
+					InstructionOutcome::Return(drop_keep) => {
+						self.value_stack.drop_keep(drop_keep);
+						break;
+					},
+				}
 			}
 		}
 

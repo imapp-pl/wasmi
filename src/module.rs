@@ -608,6 +608,7 @@ impl ModuleInstance {
 		args: &[RuntimeValue],
 		externals: &mut E,
 		sample: u32,
+		print_wasm_opcodes: bool,
 	) -> Result<Option<RuntimeValue>, Error> {
 		let extern_val = self.export_by_name(func_name).ok_or_else(|| {
 			Error::Function(format!("Module doesn't have export {}", func_name))
@@ -625,7 +626,7 @@ impl ModuleInstance {
 		};
 
 		check_function_args(func_instance.signature(), &args)?;
-		FuncInstance::invoke(&func_instance, args, externals, sample)
+		FuncInstance::invoke(&func_instance, args, externals, sample, print_wasm_opcodes)
 			.map_err(|t| Error::Trap(t))
 	}
 
@@ -679,12 +680,12 @@ impl<'a> NotStartedModuleRef<'a> {
 	/// # Errors
 	///
 	/// Returns `Err` if start function traps.
-	pub fn run_start<E: Externals>(self, state: &mut E, sample: u32) -> Result<ModuleRef, Trap> {
+	pub fn run_start<E: Externals>(self, state: &mut E, sample: u32, print_wasm_opcodes: bool) -> Result<ModuleRef, Trap> {
 		if let Some(start_fn_idx) = self.loaded_module.module().start_section() {
 			let start_func = self.instance.func_by_index(start_fn_idx).expect(
 				"Due to validation start function should exists",
 			);
-			FuncInstance::invoke(&start_func, &[], state, sample)?;
+			FuncInstance::invoke(&start_func, &[], state, sample, print_wasm_opcodes)?;
 		}
 		Ok(self.instance)
 	}
